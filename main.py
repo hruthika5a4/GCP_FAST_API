@@ -1,90 +1,93 @@
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse, FileResponse
-from datetime import datetime
 from google.auth import default
-
-from app.audit_checks import *
-from app.report_excel import create_excel_report
-from app.report_email import send_audit_email
+from audit_checks import (
+    check_compute_public_ips,
+    check_sql_public_ips,
+    check_gke_clusters,
+    check_owner_service_accounts,
+    check_public_buckets,
+    check_firewall_rules,
+    check_load_balancers_audit,
+    check_cloud_functions_and_run
+)
 
 app = FastAPI(title="GCP Security Audit API")
 
-def get_creds(project):
-    credentials, detected_project = default()
-    if detected_project != project:
-        raise Exception("GCP project credentials mismatch")
-    return credentials
 
+# Root endpoint
 @app.get("/")
-def home():
-    return {"message": "✅ FastAPI GCP Security Audit Running"}
+def root():
+    return {"message": "GCP Audit API is running ✅"}
 
-# ------------ Individual APIs ------------
 
+# Compute Audit
 @app.get("/audit/compute")
-def compute(project: str):
-    creds = get_creds(project)
+def audit_compute(project: str = Query(...)):
+    creds, _ = default()
     return check_compute_public_ips(creds, project)
 
+
+# SQL Audit
 @app.get("/audit/sql")
-def sql(project: str):
-    creds = get_creds(project)
+def audit_sql(project: str = Query(...)):
+    creds, _ = default()
     return check_sql_public_ips(creds, project)
 
+
+# GKE Audit
 @app.get("/audit/gke")
-def gke(project: str):
-    creds = get_creds(project)
+def audit_gke(project: str = Query(...)):
+    creds, _ = default()
     return check_gke_clusters(creds, project)
 
-@app.get("/audit/service-accounts")
-def service_accounts(project: str):
-    creds = get_creds(project)
+
+# IAM Audit
+@app.get("/audit/iam")
+def audit_iam(project: str = Query(...)):
+    creds, _ = default()
     return check_owner_service_accounts(creds, project)
 
+
+# Bucket Audit
 @app.get("/audit/buckets")
-def buckets(project: str):
-    creds = get_creds(project)
+def audit_buckets(project: str = Query(...)):
+    creds, _ = default()
     return check_public_buckets(creds, project)
 
+
+# Firewall Audit
 @app.get("/audit/firewall")
-def firewall(project: str):
-    creds = get_creds(project)
+def audit_firewall(project: str = Query(...)):
+    creds, _ = default()
     return check_firewall_rules(creds, project)
 
-@app.get("/audit/load-balancers")
-def lb(project: str):
-    creds = get_creds(project)
+
+# Load Balancers Audit
+@app.get("/audit/loadbalancers")
+def audit_lb(project: str = Query(...)):
+    creds, _ = default()
     return check_load_balancers_audit(creds, project)
 
-@app.get("/audit/cloud-services")
-def cloud_services(project: str):
-    creds = get_creds(project)
+
+# Cloud Run & Functions Audit
+@app.get("/audit/cloud")
+def audit_cloud(project: str = Query(...)):
+    creds, _ = default()
     return check_cloud_functions_and_run(creds, project)
 
-# ------------ Full report API ------------
 
+# Combined Audit
 @app.get("/audit/all")
-def full_audit(project: str, email: str):
-    creds = get_creds(project)
+def audit_all(project: str = Query(...)):
+    creds, _ = default()
 
-    data = {
+    return {
         "compute": check_compute_public_ips(creds, project),
         "sql": check_sql_public_ips(creds, project),
         "gke": check_gke_clusters(creds, project),
-        "service_accounts": check_owner_service_accounts(creds, project),
+        "iam": check_owner_service_accounts(creds, project),
         "buckets": check_public_buckets(creds, project),
         "firewall": check_firewall_rules(creds, project),
         "load_balancers": check_load_balancers_audit(creds, project),
         "cloud_services": check_cloud_functions_and_run(creds, project),
     }
-
-    file_name = f"GCP_Audit_{project}_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"
-    excel_path = create_excel_report(data, file_name)
-
-    send_audit_email(project, excel_path, email)
-
-    return FileResponse(
-        excel_path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=file_name
-    )
