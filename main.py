@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from gcp_checks import (
+from audit_checks import (
     check_compute_public_ips,
     check_sql_public_ips,
     check_gke_clusters,
