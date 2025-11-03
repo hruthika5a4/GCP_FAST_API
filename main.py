@@ -1,49 +1,90 @@
-from fastapi import FastAPI
-from audit_checks import (
-    check_compute_public_ips,
-    check_sql_public_ips,
-    check_gke_clusters,
-    check_owner_service_accounts,
-    check_public_buckets,
-    check_load_balancers_audit,
-    check_firewall_rules,
-    check_cloud_functions_and_run
-)
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse, FileResponse
+from datetime import datetime
+from google.auth import default
 
-app = FastAPI(title="GCP Security Audit APIs")
+from app.audit_checks import *
+from app.report_excel import create_excel_report
+from app.report_email import send_audit_email
+
+app = FastAPI(title="GCP Security Audit API")
+
+def get_creds(project):
+    credentials, detected_project = default()
+    if detected_project != project:
+        raise Exception("GCP project credentials mismatch")
+    return credentials
 
 @app.get("/")
-def root():
-    return {"message": "GCP Audit FastAPI Running 🚀"}
+def home():
+    return {"message": "✅ FastAPI GCP Security Audit Running"}
 
-@app.get("/compute/public_ips")
-def compute_public_ips():
-    return {"data": check_compute_public_ips()}
+# ------------ Individual APIs ------------
 
-@app.get("/sql/public_ips")
-def sql_public_ips():
-    return {"data": check_sql_public_ips()}
+@app.get("/audit/compute")
+def compute(project: str):
+    creds = get_creds(project)
+    return check_compute_public_ips(creds, project)
 
-@app.get("/gke/public_clusters")
-def gke_clusters():
-    return {"data": check_gke_clusters()}
+@app.get("/audit/sql")
+def sql(project: str):
+    creds = get_creds(project)
+    return check_sql_public_ips(creds, project)
 
-@app.get("/iam/owner_service_accounts")
-def owner_service_accounts():
-    return {"data": check_owner_service_accounts()}
+@app.get("/audit/gke")
+def gke(project: str):
+    creds = get_creds(project)
+    return check_gke_clusters(creds, project)
 
-@app.get("/storage/public_buckets")
-def public_buckets():
-    return {"data": check_public_buckets()}
+@app.get("/audit/service-accounts")
+def service_accounts(project: str):
+    creds = get_creds(project)
+    return check_owner_service_accounts(creds, project)
 
-@app.get("/loadbalancer/audit")
-def load_balancers():
-    return {"data": check_load_balancers_audit()}
+@app.get("/audit/buckets")
+def buckets(project: str):
+    creds = get_creds(project)
+    return check_public_buckets(creds, project)
 
-@app.get("/firewall/public_rules")
-def firewall_rules():
-    return {"data": check_firewall_rules()}
+@app.get("/audit/firewall")
+def firewall(project: str):
+    creds = get_creds(project)
+    return check_firewall_rules(creds, project)
 
-@app.get("/serverless/functions_run_audit")
-def functions_and_run():
-    return {"data": check_cloud_functions_and_run()}
+@app.get("/audit/load-balancers")
+def lb(project: str):
+    creds = get_creds(project)
+    return check_load_balancers_audit(creds, project)
+
+@app.get("/audit/cloud-services")
+def cloud_services(project: str):
+    creds = get_creds(project)
+    return check_cloud_functions_and_run(creds, project)
+
+# ------------ Full report API ------------
+
+@app.get("/audit/all")
+def full_audit(project: str, email: str):
+    creds = get_creds(project)
+
+    data = {
+        "compute": check_compute_public_ips(creds, project),
+        "sql": check_sql_public_ips(creds, project),
+        "gke": check_gke_clusters(creds, project),
+        "service_accounts": check_owner_service_accounts(creds, project),
+        "buckets": check_public_buckets(creds, project),
+        "firewall": check_firewall_rules(creds, project),
+        "load_balancers": check_load_balancers_audit(creds, project),
+        "cloud_services": check_cloud_functions_and_run(creds, project),
+    }
+
+    file_name = f"GCP_Audit_{project}_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"
+    excel_path = create_excel_report(data, file_name)
+
+    send_audit_email(project, excel_path, email)
+
+    return FileResponse(
+        excel_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=file_name
+    )
