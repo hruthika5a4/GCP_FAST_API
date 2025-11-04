@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from audit_checks import (
     check_compute_public_ips,
-    check_sql_public_ips
+    check_sql_public_ips,
+    check_public_buckets(),
+    check_owner_service_accounts(),
+    check_gke_clusters()
 )
 
 app = FastAPI()
