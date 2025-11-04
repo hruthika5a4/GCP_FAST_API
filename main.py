@@ -16,11 +16,11 @@ app = FastAPI()
 def root():
     return {"status": "GCP Audit API Running ✅"}
 
-@app.get("/public_ips")
+@app.get("/public_vms")
 def get_public_ips():
     return check_compute_public_ips()
 
-@app.get("/sql_ips")
+@app.get("/public_sql")
 def get_sql_ips():
     return check_sql_public_ips()
 
