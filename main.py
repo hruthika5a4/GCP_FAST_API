@@ -17,3 +17,15 @@ def get_public_ips():
 @app.get("/sql_ips")
 def get_sql_ips():
     return check_sql_public_ips()
+
+@app.get("/private_gke")
+def get_sql_ips():
+    return check_gke_clusters()
+
+@app.get("/sa_owner")
+def get_sql_ips():
+    return check_owner_service_accounts()
+
+@app.get("/public_buckets")
+def get_sql_ips():
+    return check_public_buckets()
