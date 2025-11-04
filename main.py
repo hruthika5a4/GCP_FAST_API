@@ -1,18 +1,19 @@
 from fastapi import FastAPI
-import os
-from audit_checks import check_compute_public_ips
+from audit_checks import (
+    check_compute_public_ips,
+    check_sql_public_ips
+)
 
 app = FastAPI()
 
 @app.get("/")
 def root():
-    return {"status": "Cloud Run FastAPI GCP Audit is running"}
+    return {"status": "GCP Audit API Running ✅"}
 
 @app.get("/public_ips")
 def get_public_ips():
-    project_id = os.environ.get("PROJECT_ID")
-    if not project_id:
-        return {"error": "PROJECT_ID env var not set"}
+    return check_compute_public_ips()
 
-    data = check_compute_public_ips(project_id)
-    return {"project": project_id, "public_ips": data}
+@app.get("/sql_ips")
+def get_sql_ips():
+    return check_sql_public_ips()
