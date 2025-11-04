@@ -4,7 +4,10 @@ from audit_checks import (
     check_sql_public_ips,
     check_public_buckets,
     check_owner_service_accounts,
-    check_gke_clusters
+    check_gke_clusters,
+    check_firewall_rules,
+    cloud_functions_and_run,
+    check_load_balancers_audit
 )
 
 app = FastAPI()
@@ -32,3 +35,15 @@ def get_owner_sa():
 @app.get("/public_buckets")
 def get_public_buckets_route():
     return check_public_buckets()
+
+@app.get("/gke_firewall_rules")
+def get_firewall_rules():
+    return check_firewall_rules()
+
+@app.get("/load_balancers")
+def get_load_balancers():
+    return check_load_balancers_audit()
+
+@app.get("/cloud_functions_and_run")
+def get_cloud_functions_and_run():
+    return ‎check_cloud_functions_and_run()‎
