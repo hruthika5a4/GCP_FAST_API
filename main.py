@@ -8,7 +8,7 @@ import uuid
 import os
 
 # Read config from env
-AUDIT_AGENT_PROJECT = os.getenv("AUDIT_AGENT_PROJECT_ID")
+AUDIT_AGENT_PROJECT = os.getenv("PROJECT_ID")
 if not AUDIT_AGENT_PROJECT:
     raise RuntimeError("Missing environment variable AUDIT_AGENT_PROJECT_ID")
 
