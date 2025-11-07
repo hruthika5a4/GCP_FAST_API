@@ -1,49 +1,64 @@
-from fastapi import FastAPI
-from audit_checks import (
-    check_compute_public_ips,
-    check_sql_public_ips,
-    check_public_buckets,
-    check_owner_service_accounts,
-    check_gke_clusters,
-    check_firewall_rules,
-    check_cloud_functions_and_run,
-    check_load_balancers_audit
-)
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from googleapiclient import discovery
+from google.oauth2 import service_account
 
-app = FastAPI()
+app = FastAPI(title="GCP Audit Agent", version="1.0")
 
-@app.get("/")
-def root():
-    return {"status": "GCP Audit API Running ✅"}
+# ---------------------------
+# 📘 Request Model
+# ---------------------------
+class ServiceAccountPayload(BaseModel):
+    service_account: dict  # Full JSON of the SA key
 
-@app.get("/public_vms")
-def get_public_ips():
-    return check_compute_public_ips()
 
-@app.get("/public_sql")
-def get_sql_ips():
-    return check_sql_public_ips()
+# ---------------------------
+# 🔍 Audit Function
+# ---------------------------
+def check_compute_public_ips(service_account_info: dict):
+    """
+    Fetch public IPs of all VMs in the project
+    associated with the given service account JSON.
+    """
+    try:
+        # Create credentials from in-memory SA JSON
+        creds = service_account.Credentials.from_service_account_info(service_account_info)
+        project_id = creds.project_id
+        if not project_id:
+            raise HTTPException(status_code=400, detail="No project_id found in service account JSON.")
 
-@app.get("/gke_public_endpoints")
-def get_gke_endpoints():
-    return check_gke_clusters()
+        compute = discovery.build("compute", "v1", credentials=creds)
+        vm_data = []
 
-@app.get("/owner_sa")
-def get_owner_sa():
-    return check_owner_service_accounts()
+        req = compute.instances().aggregatedList(project=project_id)
+        while req is not None:
+            res = req.execute()
+            for zone, scoped_list in res.get("items", {}).items():
+                for instance in scoped_list.get("instances", []):
+                    name = instance["name"]
+                    for nic in instance.get("networkInterfaces", []):
+                        for ac in nic.get("accessConfigs", []):
+                            if "natIP" in ac:
+                                vm_data.append({
+                                    "vm_name": name,
+                                    "zone": zone.split("/")[-1],
+                                    "public_ip": ac["natIP"]
+                                })
+            req = compute.instances().aggregatedList_next(req, res)
 
-@app.get("/public_buckets")
-def get_public_buckets_route():
-    return check_public_buckets()
+        return {"project_id": project_id, "vms": vm_data}
 
-@app.get("/firewall_rules")
-def get_firewall_rules():
-    return check_firewall_rules()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Audit error: {str(e)}")
 
-@app.get("/load_balancers")
-def get_load_balancers():
-    return check_load_balancers_audit()
 
-@app.get("/cloud_functions_and_run")
-def get_cloud_functions_run():
-    return check_cloud_functions_and_run()
+# ---------------------------
+# 🚀 API Endpoint
+# ---------------------------
+@app.post("/audit-vms")
+def audit_vms(payload: ServiceAccountPayload):
+    """
+    Takes a service account JSON and returns all VM instances
+    with public IPs from that project.
+    """
+    return check_compute_public_ips(payload.service_account)
