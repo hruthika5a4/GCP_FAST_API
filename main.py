@@ -2,14 +2,33 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from googleapiclient import discovery
 from google.oauth2 import service_account
+from google.cloud import secretmanager
+import json
 
-app = FastAPI(title="GCP Audit Agent", version="1.0")
+app = FastAPI(title="GCP Audit Agent", version="1.1")
+
 
 # ---------------------------
 # 📘 Request Model
 # ---------------------------
-class ServiceAccountPayload(BaseModel):
-    service_account: dict  # Full JSON of the SA key
+class SecretRefPayload(BaseModel):
+    secret_name: str  # e.g. "projects/my-project/secrets/audit-sa-001/versions/latest"
+
+
+# ---------------------------
+# 🧩 Helper — Load SA from Secret Manager
+# ---------------------------
+def load_service_account_from_secret(secret_name: str) -> dict:
+    """
+    Loads service account JSON stored in Google Secret Manager.
+    """
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        response = client.access_secret_version(request={"name": secret_name})
+        payload = response.payload.data.decode("utf-8")
+        return json.loads(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load secret: {str(e)}")
 
 
 # ---------------------------
@@ -21,7 +40,6 @@ def check_compute_public_ips(service_account_info: dict):
     associated with the given service account JSON.
     """
     try:
-        # Create credentials from in-memory SA JSON
         creds = service_account.Credentials.from_service_account_info(service_account_info)
         project_id = creds.project_id
         if not project_id:
@@ -56,9 +74,10 @@ def check_compute_public_ips(service_account_info: dict):
 # 🚀 API Endpoint
 # ---------------------------
 @app.post("/audit-vms")
-def audit_vms(payload: ServiceAccountPayload):
+def audit_vms(payload: SecretRefPayload):
     """
-    Takes a service account JSON and returns all VM instances
+    Takes a Secret Manager reference and returns all VM instances
     with public IPs from that project.
     """
-    return check_compute_public_ips(payload.service_account)
+    service_account_info = load_service_account_from_secret(payload.secret_name)
+    return check_compute_public_ips(service_account_info)
