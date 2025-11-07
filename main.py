@@ -1,91 +1,80 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from googleapiclient import discovery
 from google.oauth2 import service_account
-from google.cloud import secretmanager
 import json
-import uuid
+import bcrypt
+import jwt
 import os
-
-app = FastAPI(title="GCP Audit Agent", version="1.1")
+from datetime import datetime, timedelta
 
 # -----------------------------
-# ✅ Health check endpoint
+# ⚙️ Configuration
+# -----------------------------
+SECRET_KEY = "supersecretjwtkey"  # 🔒 Replace with a strong secret (use Secret Manager ideally)
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+app = FastAPI(title="GCP Audit Agent", version="2.0")
+
+# -----------------------------
+# 🌐 Enable CORS
+# -----------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ✅ Allow all origins (you can restrict later)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -----------------------------
+# ✅ Health Check
 # -----------------------------
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
+
 # -----------------------------
-# 📦 Upload Service Account JSON
+# 🔐 Generate JWT Token
 # -----------------------------
-@app.post("/upload-sa")
-async def upload_service_account(file: UploadFile = File(...)):
-    """
-    Upload a Service Account JSON and store securely in Secret Manager.
-    """
+class AuthPayload(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/login")
+def login(payload: AuthPayload):
+    # Example: password hashing and checking
+    hashed_pw = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt())
+
+    # Normally, you'd check credentials from DB; here we mock success
+    if payload.username != "admin":
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # ✅ Create JWT token
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = jwt.encode({"sub": payload.username, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# -----------------------------
+# 🔍 Verify JWT Token
+# -----------------------------
+def verify_token(token: str):
     try:
-        content = await file.read()
-        sa_data = json.loads(content)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Uploaded file is not valid JSON.")
-
-    if "client_email" not in sa_data or "private_key" not in sa_data:
-        raise HTTPException(status_code=400, detail="Invalid service account JSON.")
-
-    sa_email = sa_data["client_email"].split("@")[0]
-    secret_id = f"{sa_email}-{uuid.uuid4().hex[:8]}"
-
-    # ✅ Get the project ID where the app is running
-    project_id = os.getenv("PROJECT_ID")
-    if not project_id:
-        raise HTTPException(status_code=500, detail="PROJECT_ID environment variable not set.")
-
-    client = secretmanager.SecretManagerServiceClient()
-    parent = f"projects/{project_id}"
-
-    try:
-        # Create secret
-        secret = client.create_secret(
-            request={
-                "parent": parent,
-                "secret_id": secret_id,
-                "secret": {"replication": {"automatic": {}}},
-            }
-        )
-
-        # Add SA JSON as version
-        client.add_secret_version(
-            request={
-                "parent": secret.name,
-                "payload": {"data": content},
-            }
-        )
-
-        return {
-            "message": "Service account securely uploaded.",
-            "secret_name": f"{secret.name}/versions/latest"
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Secret upload failed: {str(e)}")
+        decoded = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return decoded
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 # -----------------------------
-# 🔐 Load SA JSON from Secret Manager
-# -----------------------------
-def load_service_account_from_secret(secret_name: str) -> dict:
-    try:
-        client = secretmanager.SecretManagerServiceClient()
-        response = client.access_secret_version(request={"name": secret_name})
-        payload = response.payload.data.decode("utf-8")
-        return json.loads(payload)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load secret: {str(e)}")
-
-
-# -----------------------------
-# 🕵️‍♀️ Audit Function - Get Public IPs
+# 🧠 Compute Engine Audit
 # -----------------------------
 def check_compute_public_ips(service_account_info: dict):
     try:
@@ -120,12 +109,23 @@ def check_compute_public_ips(service_account_info: dict):
 
 
 # -----------------------------
-# 🚀 Main API - Audit VMs
+# 🚀 Main API - Upload JSON & Audit
 # -----------------------------
-class SecretRefPayload(BaseModel):
-    secret_name: str  # e.g., projects/my-project/secrets/.../versions/latest
-
 @app.post("/audit-vms")
-def audit_vms(payload: SecretRefPayload):
-    sa_info = load_service_account_from_secret(payload.secret_name)
+async def audit_vms(file: UploadFile = File(...), token: str = ""):
+    """
+    Takes a Service Account JSON file and audits Compute Engine instances for public IPs.
+    """
+    # 🔒 Verify JWT token before proceeding
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    verify_token(token)
+
+    try:
+        content = await file.read()
+        sa_info = json.loads(content)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Uploaded file is not valid JSON.")
+
+    # ✅ Audit public IPs
     return check_compute_public_ips(sa_info)
