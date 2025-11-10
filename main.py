@@ -1,27 +1,14 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from googleapiclient import discovery
 from google.oauth2 import service_account
 import json
 
 app = FastAPI(title="GCP VM Audit", version="1.0")
 
-# -----------------------------
-# 📦 Request Model
-# -----------------------------
-class ServiceAccountJSON(BaseModel):
-    service_account_info: dict
-
-# -----------------------------
-# 🔍 VM Audit Function
-# -----------------------------
 def check_compute_public_ips(service_account_info: dict):
     try:
         creds = service_account.Credentials.from_service_account_info(service_account_info)
         project_id = creds.project_id
-        if not project_id:
-            raise HTTPException(status_code=400, detail="No project_id found in service account JSON.")
-
         compute = discovery.build("compute", "v1", credentials=creds)
         vm_data = []
 
@@ -41,17 +28,23 @@ def check_compute_public_ips(service_account_info: dict):
                                 })
             req = compute.instances().aggregatedList_next(req, res)
 
-        return {"project_id": project_id, "vulnerable_vms": vm_data}
+        return {
+            "project_id": project_id,
+            "vulnerable_vms": vm_data or "✅ No public IPs found — all VMs are safe"
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audit error: {str(e)}")
 
-# -----------------------------
-# 🚀 API Endpoint
-# -----------------------------
 @app.post("/vm_audit")
-def vm_audit(payload: ServiceAccountJSON):
+async def vm_audit(file: UploadFile = File(...)):
     """
-    Takes a GCP Service Account JSON and audits for VMs with public IPs.
+    Upload a GCP Service Account JSON file and audit for public VM IPs.
     """
-    return check_compute_public_ips(payload.service_account_info)
+    try:
+        content = await file.read()
+        sa_info = json.loads(content)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON file uploaded.")
+
+    return check_compute_public_ips(sa_info)
