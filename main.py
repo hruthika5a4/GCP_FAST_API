@@ -1,80 +1,19 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
 from googleapiclient import discovery
 from google.oauth2 import service_account
 import json
-import bcrypt
-import jwt
-import os
-from datetime import datetime, timedelta
+
+app = FastAPI(title="GCP VM Audit", version="1.0")
 
 # -----------------------------
-# ⚙️ Configuration
+# 📦 Request Model
 # -----------------------------
-SECRET_KEY = "supersecretjwtkey"  # 🔒 Replace with a strong secret (use Secret Manager ideally)
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-app = FastAPI(title="GCP Audit Agent", version="2.0")
+class ServiceAccountJSON(BaseModel):
+    service_account_info: dict
 
 # -----------------------------
-# 🌐 Enable CORS
-# -----------------------------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # ✅ Allow all origins (you can restrict later)
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# -----------------------------
-# ✅ Health Check
-# -----------------------------
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
-
-# -----------------------------
-# 🔐 Generate JWT Token
-# -----------------------------
-class AuthPayload(BaseModel):
-    username: str
-    password: str
-
-
-@app.post("/login")
-def login(payload: AuthPayload):
-    # Example: password hashing and checking
-    hashed_pw = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt())
-
-    # Normally, you'd check credentials from DB; here we mock success
-    if payload.username != "admin":
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    # ✅ Create JWT token
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    token = jwt.encode({"sub": payload.username, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
-    return {"access_token": token, "token_type": "bearer"}
-
-
-# -----------------------------
-# 🔍 Verify JWT Token
-# -----------------------------
-def verify_token(token: str):
-    try:
-        decoded = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return decoded
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-# -----------------------------
-# 🧠 Compute Engine Audit
+# 🔍 VM Audit Function
 # -----------------------------
 def check_compute_public_ips(service_account_info: dict):
     try:
@@ -102,30 +41,17 @@ def check_compute_public_ips(service_account_info: dict):
                                 })
             req = compute.instances().aggregatedList_next(req, res)
 
-        return {"project_id": project_id, "vms": vm_data}
+        return {"project_id": project_id, "vulnerable_vms": vm_data}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audit error: {str(e)}")
 
-
 # -----------------------------
-# 🚀 Main API - Upload JSON & Audit
+# 🚀 API Endpoint
 # -----------------------------
-@app.post("/audit-vms")
-async def audit_vms(file: UploadFile = File(...), token: str = ""):
+@app.post("/vm_audit")
+def vm_audit(payload: ServiceAccountJSON):
     """
-    Takes a Service Account JSON file and audits Compute Engine instances for public IPs.
+    Takes a GCP Service Account JSON and audits for VMs with public IPs.
     """
-    # 🔒 Verify JWT token before proceeding
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing token")
-    verify_token(token)
-
-    try:
-        content = await file.read()
-        sa_info = json.loads(content)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Uploaded file is not valid JSON.")
-
-    # ✅ Audit public IPs
-    return check_compute_public_ips(sa_info)
+    return check_compute_public_ips(payload.service_account_info)
